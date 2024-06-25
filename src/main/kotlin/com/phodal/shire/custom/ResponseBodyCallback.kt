@@ -22,10 +22,7 @@
 package com.phodal.shire.custom
 
 import com.intellij.openapi.diagnostic.logger
-import com.theokanning.openai.service.OpenAiService
-import com.theokanning.openai.service.SSE
-import com.theokanning.openai.service.SSEFormatException
-import io.reactivex.FlowableEmitter
+import io.reactivex.rxjava3.core.FlowableEmitter
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Response
@@ -85,8 +82,10 @@ class ResponseBodyCallback(private val emitter: FlowableEmitter<SSE>, private va
                         val eventName = line!!.substring(6).trim { it <= ' ' }
                         if (eventName == "ping") {
                             // skip ping event and data
-                            emitter.onNext(sse)
-                            emitter.onNext(sse)
+                            if (sse != null) {
+                                emitter.onNext(sse)
+                                emitter.onNext(sse)
+                            }
                         }
 
                         null
@@ -136,8 +135,6 @@ class ResponseBodyCallback(private val emitter: FlowableEmitter<SSE>, private va
     override fun onFailure(call: Call, e: IOException) {
         emitter.onError(e)
     }
-
-    companion object {
-        private val mapper = OpenAiService.defaultObjectMapper()
-    }
 }
+
+class SSEFormatException(msg: String?) : Throwable(msg)

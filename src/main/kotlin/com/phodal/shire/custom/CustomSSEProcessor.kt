@@ -1,16 +1,15 @@
 package com.phodal.shire.custom
 
+import com.aallam.openai.api.chat.ChatCompletion
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.nfeld.jsonpathkt.JsonPath
 import com.nfeld.jsonpathkt.extension.read
 import com.phodal.shire.llm.LlmProvider.Companion.ChatRole
-import com.theokanning.openai.completion.chat.ChatCompletionResult
-import com.theokanning.openai.service.SSE
-import io.reactivex.BackpressureStrategy
-import io.reactivex.Flowable
-import io.reactivex.FlowableEmitter
+import io.reactivex.rxjava3.core.BackpressureStrategy
+import io.reactivex.rxjava3.core.Flowable
+import io.reactivex.rxjava3.core.FlowableEmitter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -88,13 +87,17 @@ open class CustomSSEProcessor(private val project: Project) {
                                     trySend(chunk)
                                 }
                             } else {
-                                val result: ChatCompletionResult =
-                                    ObjectMapper().readValue(sse!!.data, ChatCompletionResult::class.java)
+                                val completion: ChatCompletion =
+                                    ObjectMapper().readValue(sse!!.data, ChatCompletion::class.java)
 
-                                val completion = result.choices[0].message
-                                if (completion != null && completion.content != null) {
-                                    output += completion.content
-                                    trySend(completion.content)
+                                if (completion.choices.isNotEmpty()) {
+                                    val content = completion.choices[0].message?.content
+                                    if (content != null ) {
+                                        output += content
+                                        trySend(content)
+                                    }
+                                } else {
+                                    //
                                 }
                             }
                         }

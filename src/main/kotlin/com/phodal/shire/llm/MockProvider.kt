@@ -9,10 +9,6 @@ class MockProvider : LlmProvider {
         return false
     }
 
-    override fun text(promptText: String): String {
-        return "mock"
-    }
-
     override fun stream(promptText: String, systemPrompt: String, keepHistory: Boolean): Flow<String> {
         return flowOf("mock")
     }

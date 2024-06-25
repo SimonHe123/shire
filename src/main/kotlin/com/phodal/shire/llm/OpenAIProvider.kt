@@ -1,28 +1,24 @@
 package com.phodal.shire.llm
 
+import com.aallam.openai.api.chat.ChatCompletionRequest
+import com.aallam.openai.api.chat.ChatMessage
+import com.aallam.openai.api.chat.ChatRole
+import com.aallam.openai.api.http.Timeout
+import com.aallam.openai.api.model.ModelId
+import com.aallam.openai.client.OpenAI
+import com.aallam.openai.client.OpenAIConfig
+import com.aallam.openai.client.OpenAIHost
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.phodal.shire.settings.ShireSettingsState
-import com.theokanning.openai.client.OpenAiApi
-import com.theokanning.openai.completion.chat.ChatCompletionRequest
-import com.theokanning.openai.completion.chat.ChatMessage
-import com.theokanning.openai.completion.chat.ChatMessageRole
-import com.theokanning.openai.service.OpenAiService
-import com.theokanning.openai.service.OpenAiService.defaultClient
-import com.theokanning.openai.service.OpenAiService.defaultObjectMapper
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.withContext
-import retrofit2.Retrofit
-import retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory
-import retrofit2.converter.jackson.JacksonConverterFactory
-import java.time.Duration
 
 class OpenAIProvider : LlmProvider {
     private val logger: Logger = logger<OpenAIProvider>()
-    private val timeout = Duration.ofSeconds(defaultTimeout)
+//    private val timeout = (defaultTimeout).toDuration(DurationUnit.SECONDS)
     private val modelName: String
         get() = ShireSettingsState.getInstance().modelName
     private val openAiKey: String
@@ -31,7 +27,7 @@ class OpenAIProvider : LlmProvider {
     private val messages: MutableList<ChatMessage> = ArrayList()
     private var historyMessageLength: Int = 0
 
-    private val service: OpenAiService
+    private val service: OpenAI
         get() {
             if (openAiKey.isEmpty()) {
                 throw IllegalStateException("You LLM server Key is empty")
@@ -39,24 +35,24 @@ class OpenAIProvider : LlmProvider {
 
             var openAiProxy = ShireSettingsState.getInstance().apiHost
             return if (openAiProxy.isEmpty()) {
-                OpenAiService(openAiKey, timeout)
+                val openAIConfig = OpenAIConfig(
+                    token = openAiKey,
+//                    timeout = Timeout(socket = timeout)
+                )
+
+                OpenAI(openAIConfig)
             } else {
                 if (!openAiProxy.endsWith("/")) {
                     openAiProxy += "/"
                 }
 
-                val mapper = defaultObjectMapper()
-                val client = defaultClient(openAiKey, timeout)
+                val config = OpenAIConfig(
+                    token = openAiKey,
+//                    timeout = Timeout(socket = timeout),
+                    host = OpenAIHost(baseUrl = openAiProxy)
+                )
 
-                val retrofit = Retrofit.Builder()
-                    .baseUrl(openAiProxy)
-                    .client(client)
-                    .addConverterFactory(JacksonConverterFactory.create(mapper))
-                    .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
-                    .build()
-
-                val api = retrofit.create(OpenAiApi::class.java)
-                OpenAiService(api)
+                OpenAI(config)
             }
         }
 
@@ -69,16 +65,6 @@ class OpenAIProvider : LlmProvider {
         historyMessageLength = 0
     }
 
-    override fun text(promptText: String): String {
-        val completionRequest = prepareRequest(promptText, "")
-
-        val completion = service.createChatCompletion(completionRequest)
-        val output = completion
-            .choices[0].message.content
-
-        return output
-    }
-
     override fun stream(promptText: String, systemPrompt: String, keepHistory: Boolean): Flow<String> {
         if (!keepHistory) {
             clearMessage()
@@ -89,19 +75,21 @@ class OpenAIProvider : LlmProvider {
 
         return callbackFlow {
             withContext(Dispatchers.IO) {
-                service.streamChatCompletion(completionRequest)
-                    .doOnError { error ->
-                        logger.error("Error in stream", error)
-                        trySend(error.message ?: "Error occurs")
-                    }
-                    .blockingForEach { response ->
-                        if (response.choices.isNotEmpty()) {
-                            val completion = response.choices[0].message
-                            if (completion != null && completion.content != null) {
-                                output += completion.content
-                                trySend(completion.content)
+                service.chatCompletions(completionRequest)
+                    .onEach {
+                        if (it.choices.isNotEmpty()) {
+                            val content = it.choices[0].delta?.content
+                            if (content != null ) {
+                                output += content
+                                trySend(content)
                             }
                         }
+                    }
+                    .onCompletion { println() }
+                    .catch { error ->
+                        logger.error("Error in stream", error)
+                        trySend(error.message ?: "Error occurs")
+                        error.printStackTrace()
                     }
 
                 if (!keepHistory) {
@@ -113,13 +101,13 @@ class OpenAIProvider : LlmProvider {
         }
     }
 
-    private fun prepareRequest(promptText: String, systemPrompt: String): ChatCompletionRequest? {
+    private fun prepareRequest(promptText: String, systemPrompt: String): ChatCompletionRequest {
         if (systemPrompt.isNotEmpty()) {
-            val systemMessage = ChatMessage(ChatMessageRole.SYSTEM.value(), systemPrompt)
+            val systemMessage = ChatMessage(ChatRole.System, systemPrompt)
             messages.add(systemMessage)
         }
 
-        val userMessage = ChatMessage(ChatMessageRole.USER.value(), promptText)
+        val userMessage = ChatMessage(ChatRole.User, promptText)
 
         historyMessageLength += promptText.length
         if (historyMessageLength > maxTokenLength) {
@@ -129,11 +117,11 @@ class OpenAIProvider : LlmProvider {
         messages.add(userMessage)
         logger.info("messages length: ${messages.size}")
 
-        val chatCompletionRequest = ChatCompletionRequest.builder()
-            .model(modelName)
-            .temperature(0.0)
-            .messages(messages)
-            .build()
+        val chatCompletionRequest = ChatCompletionRequest (
+            model = ModelId(modelName),
+            messages = listOf(userMessage),
+            temperature = 0.0
+        )
 
         return chatCompletionRequest
     }
